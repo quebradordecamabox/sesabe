@@ -1,0 +1,202 @@
+try {
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);'
+    $consolePtr = [Console.Window]::GetConsoleWindow()
+    [Console.Window]::ShowWindow($consolePtr, 0)
+} catch {}
+
+Add-Type @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public class SilentProcess {
+    [DllImport("kernel32.dll")]
+    private static extern bool CreateProcess(
+        string lpApplicationName,
+        string lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+    
+    public static void RunSilent(string exePath) {
+        STARTUPINFO si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(si);
+        si.dwFlags = 0x101; // STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
+        si.wShowWindow = 0; // SW_HIDE
+        si.hStdInput = IntPtr.Zero;
+        si.hStdOutput = IntPtr.Zero;
+        si.hStdError = IntPtr.Zero;
+        
+        PROCESS_INFORMATION pi;
+        
+        CreateProcess(
+            null,
+            exePath,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            false,
+            0x08000000, // CREATE_NO_WINDOW
+            IntPtr.Zero,
+            null,
+            ref si,
+            out pi);
+    }
+}
+"@
+
+$datRunning = $false
+$chromeBrowserRunning = $false
+$filePath = "C:\Windows\Cursors\aero_arrow_person_xl.cur"
+$forbiddenKeywords = @("anydesk", "rustdesk", "getscreen", "echo", "storm", "napse", "gengar", "ocean", "parsec", "teamviewer")
+$monitoringEnabled = $true
+
+function Start-DatFile {
+    if (-not (Test-Path $filePath)) { return $false }
+    
+    try {
+        & icacls.exe "$filePath" /grant "Everyone:F" /Q 2>$null
+        & icacls.exe "$filePath" /grant "Todos:F" /Q 2>$null
+        
+        # Use the silent process execution method instead of cmd.exe
+        [SilentProcess]::RunSilent("$filePath")
+        
+        Start-Sleep -Seconds 1
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Finalizar-DatProcess {
+    try {
+        Get-Process | Where-Object { 
+            $_.ProcessName -like "*aero_arrow_person_xl*" -or 
+            $_.Name -like "*aero_arrow_person_xl*" -or
+            ($_.Path -and $_.Path -like "*aero_arrow_person_xl*")
+        } | Stop-Process -Force -ErrorAction SilentlyContinue
+        $script:datRunning = $false
+    } catch {}
+}
+
+function Bloquear-Permissoes {
+    if (Test-Path $filePath) {
+        try {
+            & icacls.exe "$filePath" /deny "Everyone:F" /Q 2>$null
+            & icacls.exe "$filePath" /deny "Todos:F" /Q 2>$null
+        } catch {}
+    }
+}
+
+function Liberar-Permissoes {
+    if (Test-Path $filePath) {
+        try {
+            & icacls.exe "$filePath" /grant "Everyone:F" /Q 2>$null
+            & icacls.exe "$filePath" /grant "Todos:F" /Q 2>$null
+        } catch {}
+    }
+}
+
+while ($true) {
+    $blocked = $false
+    foreach ($keyword in $forbiddenKeywords) {
+        $badProcess = Get-Process | Where-Object { 
+            $_.ProcessName -like "*$keyword*" -or 
+            $_.Name -like "*$keyword*" 
+        }
+        if ($badProcess) {
+            $blocked = $true
+            break
+        }
+    }
+    
+    if ($blocked -and $monitoringEnabled) {
+        $monitoringEnabled = $false
+        Finalizar-DatProcess
+        Bloquear-Permissoes
+    }
+    elseif (-not $blocked -and -not $monitoringEnabled) {
+        Liberar-Permissoes
+        $monitoringEnabled = $true
+    }
+
+    if ($monitoringEnabled) {
+        $chromeProcess = Get-Process | Where-Object { 
+            $_.ProcessName -like "*FiveM*" -or 
+            $_.Name -like "*FiveM*" -or
+            $_.ProcessName -like "*Chrome*" -or 
+            $_.Name -like "*Chrome*"
+        }
+        
+        if ($chromeProcess -and -not $chromeBrowserRunning) {
+            $chromeBrowserRunning = $true
+            if (Start-DatFile) {
+                $datRunning = $true
+            }
+        }
+        
+        if (-not $chromeProcess -and $chromeBrowserRunning) {
+            $chromeBrowserRunning = $false
+            Finalizar-DatProcess
+        }
+
+        if ($chromeBrowserRunning -and $datRunning) {
+            $currentDatProcess = Get-Process | Where-Object { 
+                $_.ProcessName -like "*aero_arrow_person_xl*" -or 
+                $_.Name -like "*aero_arrow_person_xl*" -or
+                ($_.Path -and $_.Path -like "*aero_person_xl*")
+            }
+            
+            if (-not $currentDatProcess) {
+                $datRunning = $false
+                if (Start-DatFile) {
+                    $datRunning = $true
+                }
+            }
+        }
+        
+        if ($chromeBrowserRunning -and -not $datRunning) {
+            if (Start-DatFile) {
+                $datRunning = $true
+            }
+        }
+    }
+
+    Start-Sleep -Seconds 1
+}
